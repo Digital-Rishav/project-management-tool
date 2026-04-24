@@ -1,4 +1,5 @@
 const express = require("express");
+const path = require("path")
 const jwt = require("jsonwebtoken");
 const { authMiddleware } = require("./middleware");
 
@@ -248,6 +249,11 @@ app.put("/issue", authMiddleware, (req, res) => {
 
     res.json({ message: "Issue updated", issue });
 });
+// ==================Frontend Get all===========
+
+app.get("/", (req, res) => {
+    res.sendFile(path.join(__dirname, "frontend",  ""))  // to be implemented soon 
+})
 
 // ================= SERVER =================
 
