@@ -10,7 +10,7 @@ function authMiddleware(req, res, next) {
             });
         }
 
-        const decoded = jwt.verify(token, "Rishav1471password");
+        const decoded = jwt.verify(token, "Rishav1471");
         req.userId = decoded.userId;
 
         next();

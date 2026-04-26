@@ -2,51 +2,36 @@ const express = require("express");
 const path = require("path")
 const jwt = require("jsonwebtoken");
 const { authMiddleware } = require("./middleware");
+const { organizationModel, userModel, boardModel, issueModel } = require("./models");
 
 const app = express();
 app.use(express.json());
 
-// IDs
-let USERS_ID = 1;
-let ORGANIZATION_ID = 1;
-let BOARD_ID = 1;
-let ISSUE_ID = 1;
-
-// In-memory DB
-const USERS = [];
-const ORGANIZATIONS = [];
-const BOARDS = [];
-const ISSUES = [];
-
 // ================= AUTH =================
 
-// Signup
-app.post("/signup", (req, res) => {
+app.post("/signup", async (req, res) => {
     const { username, password } = req.body;
 
-    const userExists = USERS.find(u => u.username === username);
+    const userExists = await userModel.findOne({ username });
+
     if (userExists) {
         return res.status(400).json({
             message: "User already exists"
         });
     }
 
-    USERS.push({
-        id: USERS_ID++,
-        username,
-        password
-    });
+    const newUser = await userModel.create({ username, password });
 
-    res.json({ message: "Signup successful" });
+    res.json({
+        id: newUser._id,
+        message: "Signup successful"
+    });
 });
 
-// Signin
-app.post("/signin", (req, res) => {
+app.post("/signin", async (req, res) => {
     const { username, password } = req.body;
 
-    const user = USERS.find(
-        u => u.username === username && u.password === password
-    );
+    const user = await userModel.findOne({ username, password });
 
     if (!user) {
         return res.status(403).json({
@@ -55,8 +40,8 @@ app.post("/signin", (req, res) => {
     }
 
     const token = jwt.sign(
-        { userId: user.id },
-        "Rishav1471password"
+        { userId: user._id },
+        "Rishav1471"
     );
 
     res.json({ token });
@@ -64,78 +49,78 @@ app.post("/signin", (req, res) => {
 
 // ================= ORGANIZATION =================
 
-// Create org
-app.post("/organization", authMiddleware, (req, res) => {
+app.post("/organization", authMiddleware, async (req, res) => {
     const { title, description } = req.body;
 
-    const org = {
-        id: ORGANIZATION_ID++,
+    const org = await organizationModel.create({
         title,
         description,
         admin: req.userId,
         members: []
-    };
-
-    ORGANIZATIONS.push(org);
+    });
 
     res.json({ message: "Org created", org });
 });
 
-// Add member
-app.post("/organization/member", authMiddleware, (req, res) => {
+app.post("/organization/member", authMiddleware, async (req, res) => {
     const { organizationId, memberUsername } = req.body;
 
-    const org = ORGANIZATIONS.find(o => o.id === organizationId);
+    const org = await organizationModel.findById(organizationId);
 
-    if (!org || org.admin !== req.userId) {
+    if (!org || org.admin.toString() !== req.userId) {
         return res.status(403).json({
             message: "Not allowed"
         });
     }
 
-    const user = USERS.find(u => u.username === memberUsername);
+    const user = await userModel.findOne({ username: memberUsername });
+
     if (!user) {
         return res.status(404).json({
             message: "User not found"
         });
     }
 
-    if (!org.members.includes(user.id)) {
-        org.members.push(user.id);
+    if (!org.members.includes(user._id)) {
+        org.members.push(user._id);
+        await org.save();
     }
 
     res.json({ message: "Member added" });
 });
 
-// Remove member
-app.delete("/organization/member", authMiddleware, (req, res) => {
+app.delete("/organization/member", authMiddleware, async (req, res) => {
     const { organizationId, memberUsername } = req.body;
 
-    const org = ORGANIZATIONS.find(o => o.id === organizationId);
+    const org = await organizationModel.findById(organizationId);
 
-    if (!org || org.admin !== req.userId) {
+    if (!org || org.admin.toString() !== req.userId) {
         return res.status(403).json({
             message: "Not allowed"
         });
     }
 
-    const user = USERS.find(u => u.username === memberUsername);
+    const user = await userModel.findOne({ username: memberUsername });
+
     if (!user) {
         return res.status(404).json({
             message: "User not found"
         });
     }
 
-    org.members = org.members.filter(id => id !== user.id);
+    org.members = org.members.filter(
+        id => id.toString() !== user._id.toString()
+    );
+
+    await org.save();
 
     res.json({ message: "Member removed" });
 });
 
-// Get org
-app.get("/organization", authMiddleware, (req, res) => {
-    const organizationId = parseInt(req.query.organizationId);
+app.get("/organization", authMiddleware, async (req, res) => {
+    const { organizationId } = req.query;
 
-    const org = ORGANIZATIONS.find(o => o.id === organizationId);
+    const org = await organizationModel.findById(organizationId).populate("members", "username");
 
     if (!org) {
         return res.status(404).json({
@@ -143,101 +128,86 @@ app.get("/organization", authMiddleware, (req, res) => {
         });
     }
 
-    // Allow admin OR members
-    if (org.admin !== req.userId && !org.members.includes(req.userId)) {
+    if (
+        org.admin.toString() !== req.userId &&
+        !org.members.some(m => m._id.toString() === req.userId)
+    ) {
         return res.status(403).json({
             message: "Access denied"
         });
     }
 
-    res.json({
-        ...org,
-        members: org.members.map(id => {
-            const user = USERS.find(u => u.id === id);
-            return { id: user.id, username: user.username };
-        })
-    });
+    res.json(org);
 });
 
 // ================= BOARD =================
 
-// Create board
-app.post("/board", authMiddleware, (req, res) => {
+app.post("/board", authMiddleware, async (req, res) => {
     const { organizationId, title } = req.body;
 
-    const org = ORGANIZATIONS.find(o => o.id === organizationId);
+    const org = await organizationModel.findById(organizationId);
 
     if (!org) {
         return res.status(404).json({ message: "Org not found" });
     }
 
-    if (org.admin !== req.userId && !org.members.includes(req.userId)) {
+    if (
+        org.admin.toString() !== req.userId &&
+        !org.members.includes(req.userId)
+    ) {
         return res.status(403).json({ message: "Access denied" });
     }
 
-    const board = {
-        id: BOARD_ID++,
+    const board = await boardModel.create({
         title,
         organizationId
-    };
-
-    BOARDS.push(board);
+    });
 
     res.json({ message: "Board created", board });
 });
 
-// Get boards
-app.get("/boards", authMiddleware, (req, res) => {
+app.get("/boards", authMiddleware, async (req, res) => {
     const { organizationId } = req.query;
 
-    const boards = BOARDS.filter(
-        b => b.organizationId === parseInt(organizationId)
-    );
+    const boards = await boardModel.find({ organizationId });
 
     res.json({ boards });
 });
 
 // ================= ISSUES =================
 
-// Create issue
-app.post("/issue", authMiddleware, (req, res) => {
+app.post("/issue", authMiddleware, async (req, res) => {
     const { boardId, title, description, assignedTo } = req.body;
 
-    const board = BOARDS.find(b => b.id === boardId);
+    const board = await boardModel.findById(boardId);
+
     if (!board) {
         return res.status(404).json({ message: "Board not found" });
     }
 
-    const issue = {
-        id: ISSUE_ID++,
+    const issue = await issueModel.create({
         title,
         description,
         boardId,
         assignedTo,
         status: "TODO"
-    };
-
-    ISSUES.push(issue);
+    });
 
     res.json({ message: "Issue created", issue });
 });
 
-// Get issues
-app.get("/issues", authMiddleware, (req, res) => {
+app.get("/issues", authMiddleware, async (req, res) => {
     const { boardId } = req.query;
 
-    const issues = ISSUES.filter(
-        i => i.boardId === parseInt(boardId)
-    );
+    const issues = await issueModel.find({ boardId });
 
     res.json({ issues });
 });
 
-// Update issue
-app.put("/issue", authMiddleware, (req, res) => {
+app.put("/issue", authMiddleware, async (req, res) => {
     const { issueId, status } = req.body;
 
-    const issue = ISSUES.find(i => i.id === issueId);
+    const issue = await issueModel.findById(issueId);
 
     if (!issue) {
         return res.status(404).json({
@@ -246,14 +216,16 @@ app.put("/issue", authMiddleware, (req, res) => {
     }
 
     issue.status = status;
+    await issue.save();
 
     res.json({ message: "Issue updated", issue });
 });
-// ==================Frontend Get all===========
+
+// ================= FRONTEND =================
 
 app.get("/", (req, res) => {
-    res.sendFile(path.join(__dirname, "frontend",  ""))  // to be implemented soon 
-})
+    res.sendFile(path.join(__dirname, "frontend", "index.html"));
+});
 
 // ================= SERVER =================
 
